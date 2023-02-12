@@ -209,7 +209,9 @@ class MailHandler < ActionMailer::Base
     if issue.subject.blank?
       issue.subject = "(#{ll(Setting.default_language, :text_no_subject)})"
     end
-    issue.description = cleaned_up_text_body
+    
+    atts = add_attachments(issue)
+    issue.description = markdown_images(cleaned_up_text_body, atts)
     issue.start_date ||= User.current.today if Setting.default_issue_start_date_to_creation_date?
     if handler_options[:issue][:is_private] == '1'
       issue.is_private = true
@@ -218,7 +220,6 @@ class MailHandler < ActionMailer::Base
     # add To and Cc as watchers before saving so the watchers can reply to Redmine
     add_watchers(issue)
     issue.save!
-    add_attachments(issue)
     logger&.info "MailHandler: issue ##{issue.id} created by #{user}"
     issue
   end
@@ -252,12 +253,13 @@ class MailHandler < ActionMailer::Base
     end
     issue.safe_attributes = issue_attributes_from_keywords(issue)
     issue.safe_attributes = {'custom_field_values' => custom_field_values_from_keywords(issue)}
-    journal.notes = cleaned_up_text_body
+
+    atts = add_attachments(issue)
+    journal.notes = markdown_images(cleaned_up_text_body, atts)
 
     # add To and Cc as watchers before saving so the watchers can reply to Redmine
     add_watchers(issue)
     issue.save!
-    add_attachments(issue)
     logger&.info "MailHandler: issue ##{issue.id} updated by #{user}"
     journal
   end
@@ -299,8 +301,11 @@ class MailHandler < ActionMailer::Base
                           :content => cleaned_up_text_body)
       reply.author = user
       reply.board = message.board
+
+      atts = add_attachments(reply)
+      reply[:content] = markdown_images(cleaned_up_text_body, atts)
+
       message.children << reply
-      add_attachments(reply)
       reply
     else
       logger&.info "MailHandler: ignoring reply from [#{email.from.first}] to a locked topic"
@@ -308,37 +313,79 @@ class MailHandler < ActionMailer::Base
   end
 
   def add_attachments(obj)
+    atts = []
     if email.attachments && email.attachments.any?
       email.attachments.each do |attachment|
-        next unless accept_attachment?(attachment)
-        next unless attachment.body.decoded.size > 0
-        next unless !duplicated?(attachment, obj)
+        filename = attachment.filename
+        content_type = attachment.mime_type
+        digest = Digest::SHA256.hexdigest(attachment.body.decoded)
+        att = {
+            :filename => filename,
+            :content_type => content_type,
+            :digest => digest,
+            :available => true
+        }
 
-        obj.attachments << Attachment.create(:container => obj,
+        if not accept_attachment?(attachment) or
+           not (attachment.body.decoded.size > 0)
+            att.available = false
+            atts << att
+            next
+        end 
+
+        dup = duplicated?(obj, filename, content_type, digest) 
+        if dup
+            att[:id] = dup[:id]
+            atts << att
+            next
+        end 
+
+        created = Attachment.create(:container => obj,
                           :file => attachment.body.decoded,
                           :filename => attachment.filename,
                           :author => user,
                           :content_type => attachment.mime_type)
+        obj.attachments << created
+        att[:id] = created[:id]
+        atts << att
       end
     end
+    logger&.debug "add_attachments generated: #{atts}"
+    return atts
   end
 
-  # Returns true if attachment already exists
-  def duplicated?(attachment, obj)
-    return false unless attachment.has_content_type?
-    content_type = attachment.content_type.split(";")[0].strip
+  # converts image references to texttile/common_mark formatting.
+  # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
+  def markdown_images(text_body, atts)
+    re = /\[image: ([^.]+)\.([a-zA-Z0-9]+)\]/
+    return text_body.gsub(re) do
+      filename = $1 + "." + $2
+      content_type = "image/" + $2
+      att = atts.delete(atts.find{|att| att[:filename] == filename && att[:content_type] == content_type})
+      if att[:available] 
+        if Setting.text_formatting == "common_mark"
+          "![#{filename}](/attachments/download/#{att[:id]}/#{filename})"
+        elsif Setting.text_formatting == "textile"
+          "!/attachments/download/#{att[:id]}/#{filename}!"
+        else
+          $0
+        end
+      else
+        $0
+      end
+    end
+  end 
 
-    digest = Digest::SHA256.hexdigest(attachment.body.decoded)
-
-    filename = Attachment.sanitize_filename(attachment.filename)
-
+  # Returns returns attachment from db if already exists.
+  def duplicated?(obj, filename, content_type, digest)
+    sanitized = Attachment.sanitize_filename(filename)
     Attachment.where(
         :container_id => obj.id,
         :container_type => obj.class.name,
-        :filename => filename,
+        :filename => sanitized,
         :content_type => content_type,
         :digest => digest)
-        .exists?
+        .first
   end
 
   # Returns false if the +attachment+ of the incoming email should be ignored
