@@ -17,6 +17,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+require 'digest'
+
 class MailHandler < ActionMailer::Base
   include ActionView::Helpers::SanitizeHelper
   include Redmine::I18n
@@ -310,6 +312,7 @@ class MailHandler < ActionMailer::Base
       email.attachments.each do |attachment|
         next unless accept_attachment?(attachment)
         next unless attachment.body.decoded.size > 0
+        next unless !duplicated?(attachment, obj)
 
         obj.attachments << Attachment.create(:container => obj,
                           :file => attachment.body.decoded,
@@ -318,6 +321,24 @@ class MailHandler < ActionMailer::Base
                           :content_type => attachment.mime_type)
       end
     end
+  end
+
+  # Returns true if attachment already exists
+  def duplicated?(attachment, obj)
+    return false unless attachment.has_content_type?
+    content_type = attachment.content_type.split(";")[0].strip
+
+    digest = Digest::SHA256.hexdigest(attachment.body.decoded)
+
+    filename = Attachment.sanitize_filename(attachment.filename)
+
+    Attachment.where(
+        :container_id => obj.id,
+        :container_type => obj.class.name,
+        :filename => filename,
+        :content_type => content_type,
+        :digest => digest)
+        .exists?
   end
 
   # Returns false if the +attachment+ of the incoming email should be ignored

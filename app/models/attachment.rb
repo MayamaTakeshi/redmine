@@ -536,7 +536,7 @@ class Attachment < ActiveRecord::Base
               "#{digest}_#{filesize}_#{size}.thumb")
   end
 
-  def sanitize_filename(value)
+  def Attachment.sanitize_filename(value)
     # get only the filename, not the whole path
     just_filename = value.gsub(/\A.*(\\|\/)/m, '')
 
