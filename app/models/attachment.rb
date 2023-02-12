@@ -130,7 +130,7 @@ class Attachment < ActiveRecord::Base
   end
 
   def filename=(arg)
-    write_attribute :filename, sanitize_filename(arg.to_s)
+    write_attribute :filename, Attachment.sanitize_filename(arg.to_s)
     filename
   end
 
