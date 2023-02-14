@@ -354,7 +354,7 @@ class MailHandler < ActionMailer::Base
     return atts
   end
 
-  # converts image references to texttile/common_mark formatting.
+  # converts image references to texttile/markdown/common_mark formatting.
   # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
   def markdown_images(text_body, atts)
     re = /\[image: ([^.]+)\.([a-zA-Z0-9]+)\]/
@@ -363,7 +363,7 @@ class MailHandler < ActionMailer::Base
       content_type = "image/" + $2
       att = atts.delete(atts.find{|att| att[:filename] == filename && att[:content_type] == content_type})
       if att[:available] 
-        if Setting.text_formatting == "common_mark"
+        if ["common_mark", "markdown"].include? Setting.text_formatting
           "![#{filename}](/attachments/download/#{att[:id]}/#{filename})"
         elsif Setting.text_formatting == "textile"
           "!/attachments/download/#{att[:id]}/#{filename}!"
