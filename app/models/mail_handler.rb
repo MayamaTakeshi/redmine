@@ -312,6 +312,10 @@ class MailHandler < ActionMailer::Base
     end
   end
 
+  def cleanup_filename(filename)
+    filename.gsub(/[^0-9a-z-A-Z.]/, '_')
+  end
+
   def add_attachments(obj)
     atts = []
     if email.attachments && email.attachments.any?
@@ -320,7 +324,7 @@ class MailHandler < ActionMailer::Base
         content_type = attachment.mime_type
         digest = Digest::SHA256.hexdigest(attachment.body.decoded)
         att = {
-            :filename => filename,
+            :filename => cleanup_filename(filename),
             :content_type => content_type,
             :digest => digest,
             :available => true
@@ -342,7 +346,7 @@ class MailHandler < ActionMailer::Base
 
         created = Attachment.create(:container => obj,
                           :file => attachment.body.decoded,
-                          :filename => attachment.filename,
+                          :filename => cleanup_filename(attachment.filename),
                           :author => user,
                           :content_type => attachment.mime_type)
         obj.attachments << created
@@ -354,26 +358,38 @@ class MailHandler < ActionMailer::Base
     return atts
   end
 
-  # converts image references to texttile/markdown/common_mark formatting.
-  # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
-  def markdown_images(text_body, atts)
-    re = /\[image: ([^.]+)\.([a-zA-Z0-9]+)\]/
-    return text_body.gsub(re) do
-      filename = $1 + "." + $2
-      content_type = "image/" + $2
-      att = atts.delete(atts.find{|att| att[:filename] == filename && att[:content_type] == content_type})
-      if att[:available] 
-        if ["common_mark", "markdown"].include? Setting.text_formatting
-          "![#{filename}](/attachments/download/#{att[:id]}/#{filename})"
-        elsif Setting.text_formatting == "textile"
-          "!/attachments/download/#{att[:id]}/#{filename}!"
-        else
-          $0
-        end
+  def gen_image_markdown(att)
+    if att[:available] 
+      if ["common_mark", "markdown"].include? Setting.text_formatting
+        "![#{att[:filename]}](/attachments/download/#{att[:id]}/#{att[:filename]})"
+      elsif Setting.text_formatting == "textile"
+        "!/attachments/download/#{att[:id]}/#{att[:filename]}!"
       else
         $0
       end
+    else
+      $0
     end
+  end
+
+  # converts image references to textile/markdown/common_mark formatting.
+  # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
+  def markdown_images(text_body, atts)
+    re = /\[image: ([^.]+)\.([a-zA-Z0-9]+)\]/
+    temp = text_body.gsub(re) do
+      filename = cleanup_filename($1 + "." + $2)
+      content_type = "image/" + $2
+      att = atts.delete(atts.find{|att| att[:filename] == filename && att[:content_type] == content_type})
+      gen_image_markdown(att)
+    end
+
+    # append remaining images (images not referenced in the text_body) to the end of the text_body
+    atts.each do |att|
+      if att[:content_type].starts_with?("image/")
+        temp = temp + "\n" + gen_image_markdown(att)
+      end 
+    end
+    return temp
   end 
 
   # Returns returns attachment from db if already exists.
