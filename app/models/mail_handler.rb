@@ -320,11 +320,11 @@ class MailHandler < ActionMailer::Base
     atts = []
     if email.attachments && email.attachments.any?
       email.attachments.each do |attachment|
-        filename = attachment.filename
+        filename = cleanup_filename(attachment.filename)
         content_type = attachment.mime_type
         digest = Digest::SHA256.hexdigest(attachment.body.decoded)
         att = {
-            :filename => cleanup_filename(filename),
+            :filename => filename,
             :content_type => content_type,
             :digest => digest,
             :available => true
