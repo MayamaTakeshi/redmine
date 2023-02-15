@@ -632,6 +632,13 @@ class MailHandler < ActionMailer::Base
   class << self
     # Converts a HTML email body to text
     def html_body_to_text(html)
+      # converts <img/> to [image: FILENAME]
+      re = /<img\s+.*?alt="([^"]+?)".*?>/
+      html = html.gsub(re) do
+        filename = $1
+        "[image: #{filename}]"
+      end
+
       Redmine::WikiFormatting.html_parser.to_text(html)
     end
 
