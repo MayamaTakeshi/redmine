@@ -17,8 +17,6 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-require 'digest'
-
 class MailHandler < ActionMailer::Base
   include ActionView::Helpers::SanitizeHelper
   include Redmine::I18n
@@ -633,10 +631,16 @@ class MailHandler < ActionMailer::Base
     # Converts a HTML email body to text
     def html_body_to_text(html)
       # converts <img/> to [image: FILENAME]
-      re = /<img\s+.*?alt="([^"]+?)".*?>/
+      re = /(<img\s+.*?>)/
       html = html.gsub(re) do
-        filename = $1
-        "[image: #{filename}]"
+        doc = Nokogiri::XML($1)
+        src = doc.root['src']
+        filename = doc.root['alt']
+        if src && src.start_with?('cid:')
+          "[image: #{filename}]"
+        else
+          $1
+        end
       end
 
       Redmine::WikiFormatting.html_parser.to_text(html)
