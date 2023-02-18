@@ -372,6 +372,7 @@ class MailHandler < ActionMailer::Base
 
       dup = duplicated?(obj, filesize, content_type, digest)
       if dup
+        logger&.debug "Found duplicate for #{filename}"
         att[:filename] = dup.filename
         atts << att
         next
@@ -423,7 +424,7 @@ class MailHandler < ActionMailer::Base
     if ["common_mark", "markdown"].include? Setting.text_formatting
       filename = Addressable::URI.encode(att[:filename])
       logger&.debug "p5 #{att[:filename]}"
-      "![#{att[:filename]}](#{filename})"
+      "![#{att[:original_filename]}](#{filename})"
     elsif Setting.text_formatting == "textile"
       filename = URI.encode_www_form_component(att[:filename]).gsub("+", "%20")
       logger&.debug "p6 #{att[:filename]}"
