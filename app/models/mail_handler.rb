@@ -207,9 +207,6 @@ class MailHandler < ActionMailer::Base
     if issue.subject.blank?
       issue.subject = "(#{ll(Setting.default_language, :text_no_subject)})"
     end
-    
-    atts = add_attachments(issue)
-    issue.description = markdown_images(cleaned_up_text_body, atts)
     issue.start_date ||= User.current.today if Setting.default_issue_start_date_to_creation_date?
     if handler_options[:issue][:is_private] == '1'
       issue.is_private = true
@@ -217,7 +214,17 @@ class MailHandler < ActionMailer::Base
 
     # add To and Cc as watchers before saving so the watchers can reply to Redmine
     add_watchers(issue)
-    issue.save!
+
+    if Setting.mail_handler_keep_layout?
+      atts = process_attachments(issue)
+      issue.description = markdown_images(cleaned_up_text_body, atts)
+      issue.save!
+      create_pending_attachments(issue, atts)
+    else
+      issue.description = cleaned_up_text_body
+      issue.save!
+      add_attachments(issue)
+    end
     logger&.info "MailHandler: issue ##{issue.id} created by #{user}"
     issue
   end
@@ -252,12 +259,19 @@ class MailHandler < ActionMailer::Base
     issue.safe_attributes = issue_attributes_from_keywords(issue)
     issue.safe_attributes = {'custom_field_values' => custom_field_values_from_keywords(issue)}
 
-    atts = add_attachments(issue)
-    journal.notes = markdown_images(cleaned_up_text_body, atts)
-
     # add To and Cc as watchers before saving so the watchers can reply to Redmine
     add_watchers(issue)
-    issue.save!
+
+    if Setting.mail_handler_keep_layout?
+      atts = process_attachments(issue)
+      journal.notes = markdown_images(cleaned_up_text_body, atts)
+      issue.save!
+      create_pending_attachments(issue, atts)
+    else
+      journal.notes = cleaned_up_text_body
+      issue.save!
+      add_attachments(issue)
+    end
     logger&.info "MailHandler: issue ##{issue.id} updated by #{user}"
     journal
   end
@@ -299,11 +313,8 @@ class MailHandler < ActionMailer::Base
                           :content => cleaned_up_text_body)
       reply.author = user
       reply.board = message.board
-
-      atts = add_attachments(reply)
-      reply[:content] = markdown_images(cleaned_up_text_body, atts)
-
       message.children << reply
+      add_attachments(reply)
       reply
     else
       logger&.info "MailHandler: ignoring reply from [#{email.from.first}] to a locked topic"
@@ -311,86 +322,160 @@ class MailHandler < ActionMailer::Base
   end
 
   def add_attachments(obj)
-    atts = []
     if email.attachments && email.attachments.any?
       email.attachments.each do |attachment|
-        filename = attachment.filename
-        content_type = attachment.mime_type
-        digest = Digest::SHA256.hexdigest(attachment.body.decoded)
-        att = {
-            :filename => filename,
-            :content_type => content_type,
-            :digest => digest,
-            :available => true
-        }
+        next unless accept_attachment?(attachment)
+        next unless attachment.body.decoded.size > 0
 
-        if not accept_attachment?(attachment) or
-           not (attachment.body.decoded.size > 0)
-            att.available = false
-            atts << att
-            next
-        end 
-
-        dup = duplicated?(obj, filename, content_type, digest) 
-        if dup
-            att[:id] = dup[:id]
-            atts << att
-            next
-        end 
-
-        created = Attachment.create(:container => obj,
+        obj.attachments << Attachment.create(:container => obj,
                           :file => attachment.body.decoded,
                           :filename => attachment.filename,
                           :author => user,
                           :content_type => attachment.mime_type)
-        obj.attachments << created
-        att[:id] = created[:id]
-        atts << att
       end
     end
-    logger&.debug "add_attachments generated: #{atts}"
-    return atts
   end
 
-  def gen_image_markup(att)
-    if att[:available] 
-      if ["common_mark", "markdown"].include? Setting.text_formatting
-        filename = Addressable::URI.encode(att[:filename])
-        "![#{att[:filename]}](/attachments/download/#{att[:id]}/#{filename})"
-      elsif Setting.text_formatting == "textile"
-        filename = URI.encode_www_form_component(att[:filename]).gsub("+", "%20")
-        "!/attachments/download/#{att[:id]}/#{filename}!"
-      else
-        $0
+  def process_attachments(obj)
+    atts = []
+
+    if !email.attachments || !email.attachments.any?
+      return atts
+    end
+
+    existing_filenames = Attachment.where(
+      :container_id => obj.id,
+      :container_type => obj.class.name,
+    ).distinct.pluck(:filename)
+
+    email.attachments.each do |attachment|
+      filename = attachment.filename
+      logger&.debug "p1 #{filename}"
+      content_type = attachment.mime_type
+      digest = Digest::SHA256.hexdigest(attachment.body.decoded)
+      att = {
+        :filename => filename,
+        :content_type => content_type,
+        :digest => digest,
+        :available => true,
+      }
+
+      if not accept_attachment?(attachment) or
+         not (attachment.body.decoded.size > 0)
+          att.available = false
+          atts << att
+          next
       end
+
+      dup = duplicated?(obj, filename, content_type, digest)
+      if dup
+        atts << att
+        next
+      end
+
+      att = {
+        :file => attachment.body.decoded, # this will indicate this att must be created after obj.save!
+        :filename => uniquefy_filename(existing_filenames, attachment.filename),
+        :author => user,
+        :content_type => attachment.mime_type,
+        :available => true
+      }
+      atts << att
+    end
+
+    logger&.debug "process_attachments generated #{atts}"
+    atts
+  end
+
+  def create_pending_attachments(obj, atts)
+    atts.each do |att|
+      next unless att.key?(:file)
+      obj.attachments << Attachment.create(:container => obj,
+                          :file => att[:file],
+                          :filename => att[:filename],
+                          :author => user,
+                          :content_type => att[:mime_type])
+    end
+  end
+
+  def uniquefy_filename(filenames, filename)
+    if filenames.include?(filename)
+      base_name, extension = filename.match(/^(.*)(\.[^.]+)$/).captures
+
+      count = 1
+      new_filename = "#{base_name}-#{count}#{extension}"
+      while array_of_existing_filenames.include?(new_filename)
+        count += 1
+        new_filename = "#{base_name}-#{count}#{extension}"
+      end
+
+      # append new_filename and return it
+      filenames << new_filename
+      logger&.debug "p2 #{new_filename}"
+      new_filename
     else
-      $0
+      logger&.debug "p3 #{filename}"
+      filename
+    end
+  end
+
+  def gen_image_markup(att, default)
+    if ["common_mark", "markdown"].include? Setting.text_formatting
+      filename = Addressable::URI.encode(att[:filename])
+      logger&.debug "p5 #{att[:filename]}"
+      "![#{att[:filename]}](#{filename})"
+    elsif Setting.text_formatting == "textile"
+      filename = URI.encode_www_form_component(att[:filename]).gsub("+", "%20")
+      logger&.debug "p6 #{att[:filename]}"
+      "!#{filename}!"
+    else
+      logger&.debug "p7 #{default}"
+      default
     end
   end
 
   # converts image references to textile/markdown/common_mark formatting.
   # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
   def markdown_images(text_body, atts)
-    re = /\[image: ([^.]+)\.([a-zA-Z0-9]+)\]/
-    temp = text_body.gsub(re) do
-      filename = $1 + "." + $2
-      content_type = "image/" + $2
-      att = atts.delete(atts.find{|att| att[:filename] == filename && att[:content_type] == content_type})
-      gen_image_markup(att)
-    end
+    logger&.debug "markdown_images"
+    logger&.debug text_body
+
+    re = /\[image:\s+([^\]]+)\]/
+    temp = text_body.gsub(re) { |match|
+      filename = $1
+      sanitized = Attachment.sanitize_filename(filename)
+      logger&.debug "filename=#{filename} sanitized=#{sanitized} $0=#{$0} match=#{match}"
+      att = atts.delete(atts.find{|att| att[:filename] == filename})
+      if att
+        if att[:available]
+          logger&.debug "att available"
+          gen_image_markup(att, match)
+        else
+          logger&.debug "att not available"
+          match
+        end
+      else
+        logger&.debug "att not found"
+        match
+      end
+    }
+    logger&.debug "temp=#{temp}"
 
     # append remaining images (images not referenced in the text_body) to the end of the text_body
     atts.each do |att|
-      if att[:content_type].starts_with?("image/")
-        temp = temp + "\n" + gen_image_markup(att)
-      end 
+      if att[:content_type].starts_with?("image/") && att[:available]
+        temp = temp + "\n" + gen_image_markup(att, "")
+      end
     end
-    return temp
-  end 
+    logger&.debug "temp=#{temp}"
 
-  # Returns returns attachment from db if already exists.
+    temp
+  end
+
+  # Returns attachment from db if already exists.
   def duplicated?(obj, filename, content_type, digest)
     sanitized = Attachment.sanitize_filename(filename)
+    logger&.debug "duplicated? #{filename} #{sanitized}"
     Attachment.where(
         :container_id => obj.id,
         :container_type => obj.class.name,
@@ -630,16 +715,21 @@ class MailHandler < ActionMailer::Base
   class << self
     # Converts a HTML email body to text
     def html_body_to_text(html)
-      # converts <img/> to [image: FILENAME]
-      re = /(<img\s+.*?>)/
-      html = html.gsub(re) do
-        doc = Nokogiri::XML($1)
-        src = doc.root['src']
-        filename = doc.root['alt']
-        if src && src.start_with?('cid:')
-          "[image: #{filename}]"
-        else
-          $1
+      if Setting.mail_handler_keep_layout?
+        # converts <img/> to [image: FILENAME]
+        re = /(<img\s+.*?>)/
+        html = html.gsub(re) do
+          doc = Nokogiri::XML($1)
+          return $1 unless (doc && doc.root && doc.root.key?('src') && doc.root.key?('alt'))
+          src = doc.root['src']
+          filename = doc.root['alt']
+          if src && src.start_with?('cid:')
+            # the cid: indicates this references an attached document.
+            # (for now we will not deal with <img/> pointing to external sources)
+            "[image: #{filename}]"
+          else
+            $1
+          end
         end
       end
 
