@@ -350,14 +350,15 @@ class MailHandler < ActionMailer::Base
 
     email.attachments.each do |attachment|
       filename = attachment.filename
-      logger&.debug "p1 #{filename}"
       content_type = attachment.mime_type
       digest = Digest::SHA256.hexdigest(attachment.body.decoded)
       att = {
+        :original_filename => filename,
         :filename => filename,
         :content_type => content_type,
         :digest => digest,
         :available => true,
+        :markedup => false,
       }
 
       if not accept_attachment?(attachment) or
@@ -373,13 +374,9 @@ class MailHandler < ActionMailer::Base
         next
       end
 
-      att = {
-        :file => attachment.body.decoded, # this will indicate this att must be created after obj.save!
-        :filename => uniquefy_filename(existing_filenames, attachment.filename),
-        :author => user,
-        :content_type => attachment.mime_type,
-        :available => true
-      }
+      att[:file] = attachment.body.decoded # this will indicate this att must be created after obj.save!
+      att[:filename] = uniquefy_filename(existing_filenames, filename)
+
       atts << att
     end
 
@@ -404,7 +401,7 @@ class MailHandler < ActionMailer::Base
 
       count = 1
       new_filename = "#{base_name}-#{count}#{extension}"
-      while array_of_existing_filenames.include?(new_filename)
+      while filenames.include?(new_filename)
         count += 1
         new_filename = "#{base_name}-#{count}#{extension}"
       end
@@ -438,36 +435,30 @@ class MailHandler < ActionMailer::Base
   # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
   def markdown_images(text_body, atts)
     logger&.debug "markdown_images"
-    logger&.debug text_body
 
     re = /\[image:\s+([^\]]+)\]/
     temp = text_body.gsub(re) { |match|
       filename = $1
-      sanitized = Attachment.sanitize_filename(filename)
-      logger&.debug "filename=#{filename} sanitized=#{sanitized} $0=#{$0} match=#{match}"
-      att = atts.delete(atts.find{|att| att[:filename] == filename})
+      logger&.debug "filename=#{filename} match=#{match}"
+      att = atts.find{|att| att[:original_filename] == filename && !att[:markedup]}
       if att
         if att[:available]
-          logger&.debug "att available"
+          att[:markedup] = true
           gen_image_markup(att, match)
         else
-          logger&.debug "att not available"
           match
         end
       else
-        logger&.debug "att not found"
         match
       end
     }
-    logger&.debug "temp=#{temp}"
 
     # append remaining images (images not referenced in the text_body) to the end of the text_body
     atts.each do |att|
-      if att[:content_type].starts_with?("image/") && att[:available]
+      if att[:content_type].starts_with?("image/") && att[:available] && !att[:markedup]
         temp = temp + "\n" + gen_image_markup(att, "")
       end
     end
-    logger&.debug "temp=#{temp}"
 
     temp
   end
