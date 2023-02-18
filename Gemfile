@@ -3,7 +3,7 @@ source 'https://rubygems.org'
 ruby '>= 2.7.0', '< 3.3.0'
 
 gem 'rails', '6.1.7.2'
-gem 'rouge', '~> 4.0.0'
+gem 'rouge', '~> 4.1.0'
 gem 'request_store', '~> 1.5.0'
 gem 'mini_mime', '~> 1.1.0'
 gem "actionpack-xml_parser"
@@ -12,7 +12,7 @@ gem 'marcel'
 gem 'mail', '~> 2.8.1'
 gem 'nokogiri', '~> 1.14.0'
 gem 'i18n', '~> 1.12.0'
-gem "rbpdf", "~> 1.20.0"
+gem 'rbpdf', '~> 1.21.0'
 gem 'addressable'
 gem 'rubyzip', '~> 2.3.0'
 
@@ -103,7 +103,7 @@ group :test do
   gem "selenium-webdriver", "~> 3.142.7"
   gem 'webdrivers', '4.6.1', require: false
   # RuboCop
-  gem 'rubocop', '~> 1.44.0'
+  gem 'rubocop', '~> 1.45.1'
   gem 'rubocop-performance', '~> 1.16.0'
   gem 'rubocop-rails', '~> 2.17.2'
 end
