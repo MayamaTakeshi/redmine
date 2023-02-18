@@ -350,11 +350,13 @@ class MailHandler < ActionMailer::Base
 
     email.attachments.each do |attachment|
       filename = attachment.filename
+      filesize = attachment.body.decoded.size
       content_type = attachment.mime_type
       digest = Digest::SHA256.hexdigest(attachment.body.decoded)
       att = {
         :original_filename => filename,
         :filename => filename,
+        :filesize => filesize,
         :content_type => content_type,
         :digest => digest,
         :available => true,
@@ -362,14 +364,15 @@ class MailHandler < ActionMailer::Base
       }
 
       if not accept_attachment?(attachment) or
-         not (attachment.body.decoded.size > 0)
+         not (filesize > 0)
           att.available = false
           atts << att
           next
       end
 
-      dup = duplicated?(obj, filename, content_type, digest)
+      dup = duplicated?(obj, filesize, content_type, digest)
       if dup
+        att[:filename] = dup.filename
         atts << att
         next
       end
@@ -464,13 +467,11 @@ class MailHandler < ActionMailer::Base
   end
 
   # Returns attachment from db if already exists.
-  def duplicated?(obj, filename, content_type, digest)
-    sanitized = Attachment.sanitize_filename(filename)
-    logger&.debug "duplicated? #{filename} #{sanitized}"
+  def duplicated?(obj, filesize, content_type, digest)
     Attachment.where(
         :container_id => obj.id,
         :container_type => obj.class.name,
-        :filename => sanitized,
+        :filesize => filesize,
         :content_type => content_type,
         :digest => digest)
         .first
