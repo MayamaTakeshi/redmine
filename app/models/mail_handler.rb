@@ -355,12 +355,12 @@ class MailHandler < ActionMailer::Base
       digest = Digest::SHA256.hexdigest(attachment.body.decoded)
       att = {
         :original_filename => filename,
-        :filename => filename,
         :filesize => filesize,
         :content_type => content_type,
         :digest => digest,
         :available => true,
         :markedup => false,
+        :content_id => attachment.content_id.delete('<>')
       }
 
       if not accept_attachment?(attachment) or
@@ -412,10 +412,9 @@ class MailHandler < ActionMailer::Base
 
       # append new_filename and return it
       filenames << new_filename
-      logger&.debug "p2 #{new_filename}"
       new_filename
     else
-      logger&.debug "p3 #{filename}"
+      filenames << filename
       filename
     end
   end
@@ -423,14 +422,11 @@ class MailHandler < ActionMailer::Base
   def gen_image_markup(att, default)
     if ["common_mark", "markdown"].include? Setting.text_formatting
       filename = Addressable::URI.encode(att[:filename])
-      logger&.debug "p5 #{att[:filename]}"
       "![#{att[:original_filename]}](#{filename})"
     elsif Setting.text_formatting == "textile"
       filename = URI.encode_www_form_component(att[:filename]).gsub("+", "%20")
-      logger&.debug "p6 #{att[:filename]}"
       "!#{filename}!"
     else
-      logger&.debug "p7 #{default}"
       default
     end
   end
@@ -439,12 +435,23 @@ class MailHandler < ActionMailer::Base
   # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
   def markdown_images(text_body, atts)
     logger&.debug "markdown_images"
+    logger&.debug atts.pluck(:cid)
+    logger&.debug text_body
 
     re = /\[image:\s+([^\]]+)\]/
     temp = text_body.gsub(re) { |match|
-      filename = $1
-      logger&.debug "filename=#{filename} match=#{match}"
-      att = atts.find{|att| att[:original_filename] == filename && !att[:markedup]}
+      src = $1
+      logger&.debug "src=#{src}"
+      if src.start_with?('cid:')
+        # text/html: search by Content-ID
+        cid = src[4..-1]
+        att = atts.find{|att| att[:content_id] == cid}
+      else
+        # text/plain: get images by position in array
+        # this will permit to even get the correct image in case they have the same name (could happen in case the user does copy/paste of images in gmail)
+        # as we will follow the order of attachment
+        att = atts.find{|att| att[:content_type].start_with?('image/') && !att[:markedup]}
+      end
       if att
         if att[:available]
           att[:markedup] = true
@@ -464,6 +471,7 @@ class MailHandler < ActionMailer::Base
       end
     end
 
+    logger&.debug temp
     temp
   end
 
@@ -718,8 +726,7 @@ class MailHandler < ActionMailer::Base
           filename = doc.root['alt']
           if src && src.start_with?('cid:')
             # the cid: indicates this references an attached document.
-            # (for now we will not deal with <img/> pointing to external sources)
-            "[image: #{filename}]"
+            "[image: #{src}]"
           else
             $1
           end
