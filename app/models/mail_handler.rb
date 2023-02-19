@@ -215,9 +215,9 @@ class MailHandler < ActionMailer::Base
     # add To and Cc as watchers before saving so the watchers can reply to Redmine
     add_watchers(issue)
 
-    if Setting.mail_handler_keep_layout?
+    if Setting.mail_handler_avoid_attachment_duplication? || Setting.mail_handler_keep_layout?
       atts = process_attachments(issue)
-      issue.description = markdown_images(cleaned_up_text_body, atts)
+      issue.description = Setting.mail_handler_keep_layout? ? markdown_images(cleaned_up_text_body, atts) : cleaned_up_text_body
       issue.save!
       create_pending_attachments(issue, atts)
     else
@@ -262,9 +262,9 @@ class MailHandler < ActionMailer::Base
     # add To and Cc as watchers before saving so the watchers can reply to Redmine
     add_watchers(issue)
 
-    if Setting.mail_handler_keep_layout?
+    if Setting.mail_handler_avoid_attachment_duplication? || Setting.mail_handler_keep_layout?
       atts = process_attachments(issue)
-      journal.notes = markdown_images(cleaned_up_text_body, atts)
+      journal.notes = Setting.mail_handler_keep_layout? ? markdown_images(cleaned_up_text_body, atts) : cleaned_up_text_body
       issue.save!
       create_pending_attachments(issue, atts)
     else
@@ -343,10 +343,14 @@ class MailHandler < ActionMailer::Base
       return atts
     end
 
-    existing_filenames = Attachment.where(
-      :container_id => obj.id,
-      :container_type => obj.class.name,
-    ).distinct.pluck(:filename)
+    existing_filenames = []
+
+    if Setting.mail_handler_keep_layout?
+        existing_filenames = Attachment.where(
+          :container_id => obj.id,
+          :container_type => obj.class.name,
+        ).distinct.pluck(:filename)
+    end
 
     email.attachments.each do |attachment|
       filename = attachment.filename
@@ -370,16 +374,18 @@ class MailHandler < ActionMailer::Base
           next
       end
 
-      dup = duplicated?(obj, filesize, content_type, digest)
-      if dup
-        logger&.debug "Found duplicate for #{filename}"
-        att[:filename] = dup.filename
-        atts << att
-        next
+      if Setting.mail_handler_avoid_attachment_duplication?
+        dup = duplicated?(obj, filesize, content_type, digest)
+        if dup
+          logger&.debug "Found duplicate for #{filename}"
+          att[:filename] = dup.filename
+          atts << att
+          next
+        end
       end
 
       att[:file] = attachment.body.decoded # this will indicate this att must be created after obj.save!
-      att[:filename] = uniquefy_filename(existing_filenames, filename)
+      att[:filename] = Setting.mail_handler_keep_layout? ? uniquefy_filename(existing_filenames, filename) : filename
 
       atts << att
     end
