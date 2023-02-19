@@ -1005,6 +1005,24 @@ class MailHandlerTest < ActiveSupport::TestCase
     detail = journal.details.first
     assert_equal 'attachment', detail.property
     assert_equal 'Paella.jpg', detail.value
+
+    Setting.mail_handler_avoid_attachment_duplication = 1
+
+    assert_difference 'Journal.count' do
+      assert_no_difference 'JournalDetail.count' do
+        assert_no_difference 'Attachment.count' do
+          assert_no_difference 'Issue.count' do
+            journal = submit_email('ticket_with_attachment.eml') do |raw|
+              raw.gsub! /^Subject: .*$/, 'Subject: Re: [Cookbook - Feature #2] (New) Add ingredients categories'
+            end
+          end
+        end
+      end
+    end
+
+    journal = Journal.order('id DESC').first
+    assert_equal Issue.find(2), journal.journalized
+    assert_equal 0, journal.details.size
   end
 
   def test_update_issue_should_discard_all_changes_on_validation_failure
@@ -1415,6 +1433,101 @@ class MailHandlerTest < ActiveSupport::TestCase
     assert_equal 'application/x-pkcs7-signature', issue.attachments[1].content_type
   end
 
+  def test_issue_creation_with_keep_layout_disabled
+    set_tmp_attachments_directory
+
+    issue =
+      submit_email(
+        'gmail_with_images_and_pdf.eml',
+        :issue => {:project => 'ecookbook'}
+      )
+    assert_kind_of Issue, issue
+    assert !issue.new_record?
+    issue.reload
+
+    assert_equal "This is image 1:\r\n[image: image.png]\r\n\r\nThis is image 2:\r\n[image: image.png]" , issue.description
+
+    assert_equal 4, issue.attachments.size
+
+    assert_equal 'image.png', issue.attachments.first.filename
+    assert_equal 'image/png', issue.attachments.first.content_type
+
+    assert_equal 'image.png', issue.attachments.second.filename
+    assert_equal 'image/png', issue.attachments.second.content_type
+
+    assert_equal 'minimal.pdf', issue.attachments.third.filename
+    assert_equal 'application/pdf', issue.attachments.third.content_type
+
+    assert_equal 'image3.gif', issue.attachments.fourth.filename
+    assert_equal 'image/gif', issue.attachments.fourth.content_type
+  end
+ 
+  def test_issue_creation_with_keep_layout_and_text_formatting_common_mark
+    set_tmp_attachments_directory
+
+    Setting.mail_handler_keep_layout = 1
+    Setting.mail_handler_avoid_attachment_duplication = 1 # this should not matter as the issue doesn't exist yet
+    Setting.text_formatting = 'common_mark'
+
+    issue =
+      submit_email(
+        'gmail_with_images_and_pdf.eml',
+        :issue => {:project => 'ecookbook'}
+      )
+    assert_kind_of Issue, issue
+    assert !issue.new_record?
+    issue.reload
+
+    assert_equal "This is image 1:\r\n![image.png](image.png)\r\n\r\nThis is image 2:\r\n![image.png](image-1.png)\r\n![image3.gif](image3.gif)" , issue.description
+
+    assert_equal 4, issue.attachments.size
+
+    assert_equal 'image.png', issue.attachments.first.filename
+    assert_equal 'image/png', issue.attachments.first.content_type
+
+    assert_equal 'image-1.png', issue.attachments.second.filename
+    assert_equal 'image/png', issue.attachments.second.content_type
+
+    assert_equal 'minimal.pdf', issue.attachments.third.filename
+    assert_equal 'application/pdf', issue.attachments.third.content_type
+
+    assert_equal 'image3.gif', issue.attachments.fourth.filename
+    assert_equal 'image/gif', issue.attachments.fourth.content_type
+  end
+
+  def test_issue_creation_with_keep_layout_and_text_formatting_textile
+    set_tmp_attachments_directory
+
+    Setting.mail_handler_keep_layout = 1
+    Setting.mail_handler_avoid_attachment_duplication = 1 # this should not matter as the issue doesn't exist yet
+    Setting.text_formatting = 'textile'
+
+    issue =
+      submit_email(
+        'gmail_with_images_and_pdf.eml',
+        :issue => {:project => 'ecookbook'}
+      )
+    assert_kind_of Issue, issue
+    assert !issue.new_record?
+    issue.reload
+
+    assert_equal "This is image 1:\r\n!image.png!\r\n\r\nThis is image 2:\r\n!image-1.png!\r\n!image3.gif!" , issue.description
+
+    assert_equal 4, issue.attachments.size
+
+    assert_equal 'image.png', issue.attachments.first.filename
+    assert_equal 'image/png', issue.attachments.first.content_type
+
+    assert_equal 'image-1.png', issue.attachments.second.filename
+    assert_equal 'image/png', issue.attachments.second.content_type
+
+    assert_equal 'minimal.pdf', issue.attachments.third.filename
+    assert_equal 'application/pdf', issue.attachments.third.content_type
+
+    assert_equal 'image3.gif', issue.attachments.fourth.filename
+    assert_equal 'image/gif', issue.attachments.fourth.content_type
+  end
+ 
   private
 
   def submit_email(filename, options={})
