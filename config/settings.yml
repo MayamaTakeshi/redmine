@@ -215,7 +215,7 @@ mail_handler_api_key:
 mail_handler_preferred_body_part:
   default: plain
 mail_handler_keep_layout:
-  default: 1
+  default: 0
 issue_list_default_columns:
   serialized: true
   default:

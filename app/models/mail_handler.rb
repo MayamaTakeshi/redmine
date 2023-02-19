@@ -360,12 +360,12 @@ class MailHandler < ActionMailer::Base
         :digest => digest,
         :available => true,
         :markedup => false,
-        :content_id => attachment.content_id.delete('<>')
+        :content_id => attachment.content_id ? attachment.content_id.delete('<>') : ''
       }
 
       if not accept_attachment?(attachment) or
          not (filesize > 0)
-          att.available = false
+          att[:available] = false
           atts << att
           next
       end
@@ -395,7 +395,7 @@ class MailHandler < ActionMailer::Base
                           :file => att[:file],
                           :filename => att[:filename],
                           :author => user,
-                          :content_type => att[:mime_type])
+                          :content_type => att[:content_type])
     end
   end
 
