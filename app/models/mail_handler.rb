@@ -217,7 +217,7 @@ class MailHandler < ActionMailer::Base
 
     if Setting.mail_handler_avoid_attachment_duplication? || Setting.mail_handler_keep_layout?
       atts = process_attachments(issue)
-      issue.description = Setting.mail_handler_keep_layout? ? markdown_images(cleaned_up_text_body, atts) : cleaned_up_text_body
+      issue.description = Setting.mail_handler_keep_layout? ? markup_images(cleaned_up_text_body, atts, Setting.text_formatting) : cleaned_up_text_body
       issue.save!
       create_pending_attachments(issue, atts)
     else
@@ -264,7 +264,7 @@ class MailHandler < ActionMailer::Base
 
     if Setting.mail_handler_avoid_attachment_duplication? || Setting.mail_handler_keep_layout?
       atts = process_attachments(issue)
-      journal.notes = Setting.mail_handler_keep_layout? ? markdown_images(cleaned_up_text_body, atts) : cleaned_up_text_body
+      journal.notes = Setting.mail_handler_keep_layout? ? markup_images(cleaned_up_text_body, atts, Setting.text_formatting) : cleaned_up_text_body
       issue.save!
       create_pending_attachments(issue, atts)
     else
@@ -385,7 +385,7 @@ class MailHandler < ActionMailer::Base
       end
 
       att[:file] = attachment.body.decoded # this will indicate this att must be created after obj.save!
-      att[:filename] = Setting.mail_handler_keep_layout? ? uniquefy_filename(existing_filenames, filename) : filename
+      att[:filename] = Setting.mail_handler_keep_layout? ? self.class.uniquefy_filename(existing_filenames, filename) : filename
 
       atts << att
     end
@@ -405,9 +405,14 @@ class MailHandler < ActionMailer::Base
     end
   end
 
-  def uniquefy_filename(filenames, filename)
+  def self.uniquefy_filename(filenames, filename)
     if filenames.include?(filename)
-      base_name, extension = filename.match(/^(.*)(\.[^.]+)$/).captures
+      m = filename.match(/^(.*)(\.[^.]+)$/)
+      if m
+        base_name, extension = m.captures
+      else
+        base_name, extension = filename, ""
+      end
 
       count = 1
       new_filename = "#{base_name}-#{count}#{extension}"
@@ -425,11 +430,11 @@ class MailHandler < ActionMailer::Base
     end
   end
 
-  def gen_image_markup(att, default)
-    if ["common_mark", "markdown"].include? Setting.text_formatting
+  def self.gen_image_markup(att, default, text_formatting)
+    if ["common_mark", "markdown"].include? text_formatting
       filename = Addressable::URI.encode(att[:filename])
       "![#{att[:original_filename]}](#{filename})"
-    elsif Setting.text_formatting == "textile"
+    elsif text_formatting == "textile"
       filename = URI.encode_www_form_component(att[:filename]).gsub("+", "%20")
       "!#{filename}!"
     else
@@ -438,12 +443,7 @@ class MailHandler < ActionMailer::Base
   end
 
   # converts image references to textile/markdown/common_mark formatting.
-  # currently we support [image: NAME.EXTENSION] in the text_body (ex: [image: image.png])
-  def markdown_images(text_body, atts)
-    logger&.debug "markdown_images"
-    logger&.debug atts.pluck(:cid)
-    logger&.debug text_body
-
+  def markup_images(text_body, atts, text_formatting)
     re = /\[image:\s+([^\]]+)\]/
     temp = text_body.gsub(re) { |match|
       src = $1
@@ -461,7 +461,7 @@ class MailHandler < ActionMailer::Base
       if att
         if att[:available]
           att[:markedup] = true
-          gen_image_markup(att, match)
+          self.class.gen_image_markup(att, match, text_formatting)
         else
           match
         end
@@ -471,9 +471,10 @@ class MailHandler < ActionMailer::Base
     }
 
     # append remaining images (images not referenced in the text_body) to the end of the text_body
+    temp = temp + "\n"
     atts.each do |att|
       if att[:content_type].starts_with?("image/") && att[:available] && !att[:markedup]
-        temp = temp + "\n" + gen_image_markup(att, "")
+        temp = temp + "\n" + self.class.gen_image_markup(att, "", text_formatting)
       end
     end
 

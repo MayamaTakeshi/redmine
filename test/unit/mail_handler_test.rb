@@ -1433,6 +1433,30 @@ class MailHandlerTest < ActiveSupport::TestCase
     assert_equal 'application/x-pkcs7-signature', issue.attachments[1].content_type
   end
 
+  def test_uniquefy_filename
+    filenames = ['a.png', 'a.b.c.png', 'a-1.png', 'name with spaces.gif', 'no_extension']
+
+    clone = filenames.clone
+    result = MailHandler.send :uniquefy_filename, clone, 'new_image.png'
+    assert_equal filenames.clone << 'new_image.png', clone
+
+    clone = filenames.clone
+    result = MailHandler.send :uniquefy_filename, clone, 'a.png'
+    assert_equal filenames.clone << 'a-2.png', clone
+
+    clone = filenames.clone
+    result = MailHandler.send :uniquefy_filename, clone, 'a.b.c.png'
+    assert_equal filenames.clone << 'a.b.c-1.png', clone
+
+    clone = filenames.clone
+    result = MailHandler.send :uniquefy_filename, clone, 'name with spaces.gif'
+    assert_equal filenames.clone << 'name with spaces-1.gif', clone
+
+    clone = filenames.clone
+    result = MailHandler.send :uniquefy_filename, clone, 'no_extension'
+    assert_equal filenames.clone << 'no_extension-1', clone
+  end
+
   def test_issue_creation_with_keep_layout_disabled
     set_tmp_attachments_directory
 
@@ -1478,7 +1502,7 @@ class MailHandlerTest < ActiveSupport::TestCase
     assert !issue.new_record?
     issue.reload
 
-    assert_equal "This is image 1:\r\n![image.png](image.png)\r\n\r\nThis is image 2:\r\n![image.png](image-1.png)\r\n![image3.gif](image3.gif)" , issue.description
+    assert_equal "This is image 1:\r\n![image.png](image.png)\r\n\r\nThis is image 2:\r\n![image.png](image-1.png)\r\n\r\n![image3.gif](image3.gif)" , issue.description
 
     assert_equal 4, issue.attachments.size
 
@@ -1511,7 +1535,7 @@ class MailHandlerTest < ActiveSupport::TestCase
     assert !issue.new_record?
     issue.reload
 
-    assert_equal "This is image 1:\r\n!image.png!\r\n\r\nThis is image 2:\r\n!image-1.png!\r\n!image3.gif!" , issue.description
+    assert_equal "This is image 1:\r\n!image.png!\r\n\r\nThis is image 2:\r\n!image-1.png!\r\n\r\n!image3.gif!" , issue.description
 
     assert_equal 4, issue.attachments.size
 
@@ -1526,6 +1550,65 @@ class MailHandlerTest < ActiveSupport::TestCase
 
     assert_equal 'image3.gif', issue.attachments.fourth.filename
     assert_equal 'image/gif', issue.attachments.fourth.content_type
+  end
+
+  def test_update_issue_with_keep_layout_and_avoid_attachment_duplication
+    Setting.mail_handler_keep_layout = 1
+    Setting.mail_handler_avoid_attachment_duplication = 1
+
+    Setting.text_formatting = 'common_mark'
+
+    assert_difference 'Journal.count' do
+      assert_difference 'JournalDetail.count', 4 do
+        assert_difference 'Attachment.count', 4 do
+          assert_no_difference 'Issue.count' do
+            journal = submit_email('gmail_with_images_and_pdf.eml') do |raw|
+              raw.gsub! /^Subject: .*$/, 'Subject: Re: [Cookbook - Feature #2] (New) Add ingredients categories'
+            end
+          end
+        end
+      end
+    end
+    journal = Journal.order('id DESC').first
+    assert_equal Issue.find(2), journal.journalized
+    assert_equal 4, journal.details.size
+
+    assert_equal "This is image 1:\n![image.png](image.png)\n\nThis is image 2:\n![image.png](image-1.png)\n\n![image3.gif](image3.gif)" , journal.notes
+
+    first = journal.details.first
+    assert_equal 'attachment', first.property
+    assert_equal 'image.png', first.value
+
+    second = journal.details.second
+    assert_equal 'attachment', second.property
+    assert_equal 'image-1.png', second.value
+
+    third = journal.details.third
+    assert_equal 'attachment', third.property
+    assert_equal 'minimal.pdf', third.value
+
+    fourth = journal.details.fourth
+    assert_equal 'attachment', fourth.property
+    assert_equal 'image3.gif', fourth.value
+
+    Setting.text_formatting = 'textile'
+
+    assert_difference 'Journal.count' do
+      assert_no_difference 'JournalDetail.count' do
+        assert_no_difference 'Attachment.count' do
+          assert_no_difference 'Issue.count' do
+            journal = submit_email('gmail_with_images_and_pdf.eml') do |raw|
+              raw.gsub! /^Subject: .*$/, 'Subject: Re: [Cookbook - Feature #2] (New) Add ingredients categories'
+            end
+          end
+        end
+      end
+    end
+    journal = Journal.order('id DESC').first
+    assert_equal Issue.find(2), journal.journalized
+    assert_equal 0, journal.details.size
+
+    assert_equal "This is image 1:\n!image.png!\n\nThis is image 2:\n!image-1.png!\n\n!image3.gif!" , journal.notes
   end
  
   private
