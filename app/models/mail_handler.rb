@@ -377,7 +377,6 @@ class MailHandler < ActionMailer::Base
       if Setting.mail_handler_avoid_attachment_duplication?
         dup = duplicated?(obj, filesize, content_type, digest)
         if dup
-          logger&.debug "Found duplicate for #{filename}"
           att[:filename] = dup.filename
           atts << att
           next
@@ -390,7 +389,6 @@ class MailHandler < ActionMailer::Base
       atts << att
     end
 
-    logger&.debug "process_attachments generated #{atts}"
     atts
   end
 
@@ -447,7 +445,6 @@ class MailHandler < ActionMailer::Base
     re = /\[image:\s+([^\]]+)\]/
     temp = text_body.gsub(re) { |match|
       src = $1
-      logger&.debug "src=#{src}"
       if src.start_with?('cid:')
         # text/html: search by Content-ID
         cid = src[4..-1]
@@ -478,7 +475,6 @@ class MailHandler < ActionMailer::Base
       end
     end
 
-    logger&.debug temp
     temp
   end
 
